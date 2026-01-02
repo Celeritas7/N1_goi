@@ -7,7 +7,7 @@ if not exist ".git" (
   exit /b
 )
 
-git add .
+git add -A
 
 git diff --cached --quiet
 if errorlevel 1 (
