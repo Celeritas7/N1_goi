@@ -16,6 +16,9 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23f43f5e' rx='20' width='100' height='100'/><text x='50' y='65' font-size='40' text-anchor='middle' fill='white' font-weight='bold'>N1</text></svg>">
   <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect fill='%23f43f5e' rx='20' width='100' height='100'/><text x='50' y='65' font-size='40' text-anchor='middle' fill='white' font-weight='bold'>N1</text></svg>">
   
+  <!-- Manifest for PWA -->
+  <link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;N1 語彙マスター&quot;,&quot;short_name&quot;:&quot;N1語彙&quot;,&quot;start_url&quot;:&quot;.&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;%231e293b&quot;,&quot;theme_color&quot;:&quot;%231e293b&quot;}">
+  
   <!-- Supabase JS -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   
@@ -49,7 +52,9 @@
     .animate-fadeIn { animation: fadeIn 0.3s ease-out; }
     .animate-slideUp { animation: slideUp 0.3s ease-out; }
     .animate-pulse { animation: pulse 1.5s infinite; }
-    input, select, button { font-size: 16px; }
+    .card-flip { transition: transform 0.6s; transform-style: preserve-3d; }
+    .card-flip.flipped { transform: rotateY(180deg); }
+    input, select, button { font-size: 16px; } /* Prevent iOS zoom */
   </style>
 </head>
 <body class="bg-slate-100 min-h-screen">
@@ -61,6 +66,16 @@
     const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVsZ3JmdW1id2pvdmJqemppZW1zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjczNzIyNjcsImV4cCI6MjA4Mjk0ODI2N30.ix5Vh4Y3GXNbQbzVtTD_WSko0L3cr5q_eCnTuDEMh7M';
     
     const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+    
+    // ===== USER ID (simple device-based ID) =====
+    function getUserId() {
+      let userId = localStorage.getItem('n1vocab_user_id');
+      if (!userId) {
+        userId = 'user_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+        localStorage.setItem('n1vocab_user_id', userId);
+      }
+      return userId;
+    }
     
     // ===== PAGE TO WEEK/DAY MAPPING =====
     const PAGE_TO_WEEK_DAY = {};
@@ -117,6 +132,7 @@
         const pageNo = parseInt(row['Page no.'] || row['Page no'] || '0');
         const weekDay = getWeekDay(pageNo);
         
+        // Extract supporting words from sentence
         const sentence = row['Sentence'] || '';
         const kanji = row['Kanji'] || '';
         const kanjiClean = kanji.replace(/[＊\*\+\(\)（）①②③④⑤]/g, '');
@@ -151,9 +167,9 @@
     // ===== MAIN APP =====
     class N1VocabApp {
       constructor() {
-        this.user = null;
         this.data = [];
         this.markings = {};
+        this.userId = getUserId();
         this.view = 'database';
         this.searchTerm = '';
         this.filterWeek = null;
@@ -164,56 +180,16 @@
         this.flashcardRevealed = false;
         this.selectedWord = null;
         this.syncing = false;
-        this.loading = true;
-        this.showProfileMenu = false;
+        this.lastSync = null;
+        this.showUserIdModal = false;
         
         this.init();
       }
       
       async init() {
         this.render();
-        
-        // Check for existing session
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          this.user = session.user;
-        }
-        
-        // Listen for auth changes
-        supabase.auth.onAuthStateChange((event, session) => {
-          this.user = session?.user || null;
-          if (event === 'SIGNED_IN') {
-            this.syncFromCloud();
-          }
-          this.render();
-        });
-        
         await this.loadData();
-        if (this.user) {
-          await this.syncFromCloud();
-        }
-        this.loading = false;
-        this.render();
-      }
-      
-      // ===== AUTH METHODS =====
-      async signInWithGoogle() {
-        const { error } = await supabase.auth.signInWithOAuth({
-          provider: 'google',
-          options: {
-            redirectTo: window.location.origin + window.location.pathname
-          }
-        });
-        if (error) {
-          console.error('Login error:', error);
-          alert('Login failed: ' + error.message);
-        }
-      }
-      
-      async signOut() {
-        await supabase.auth.signOut();
-        this.user = null;
-        this.showProfileMenu = false;
+        await this.syncFromCloud();
         this.render();
       }
       
@@ -237,8 +213,6 @@
       
       // ===== CLOUD SYNC =====
       async syncFromCloud() {
-        if (!this.user) return;
-        
         try {
           this.syncing = true;
           this.render();
@@ -246,7 +220,7 @@
           const { data, error } = await supabase
             .from('vocabulary')
             .select('word_id, marking')
-            .eq('user_id', this.user.id);
+            .eq('user_id', this.userId);
           
           if (error) throw error;
           
@@ -257,6 +231,7 @@
             this.saveDataLocally();
           }
           
+          this.lastSync = new Date();
           this.syncing = false;
           this.render();
         } catch (err) {
@@ -267,19 +242,18 @@
       }
       
       async syncMarkingToCloud(wordId, marking) {
-        if (!this.user) return;
-        
         try {
           const { error } = await supabase
             .from('vocabulary')
             .upsert({
-              user_id: this.user.id,
+              user_id: this.userId,
               word_id: wordId,
               marking: marking,
               updated_at: new Date().toISOString()
             }, { onConflict: 'user_id,word_id' });
           
           if (error) throw error;
+          this.lastSync = new Date();
         } catch (err) {
           console.error('Sync marking error:', err);
         }
@@ -329,30 +303,21 @@
         return Array.from(weeks).sort((a, b) => a - b);
       }
       
+      // ===== CHANGE USER ID =====
+      changeUserId(newId) {
+        if (newId && newId.trim()) {
+          this.userId = newId.trim();
+          localStorage.setItem('n1vocab_user_id', this.userId);
+          this.markings = {};
+          this.syncFromCloud();
+        }
+        this.showUserIdModal = false;
+        this.render();
+      }
+      
       // ===== RENDER =====
       render() {
         const app = document.getElementById('app');
-        
-        // Show loading screen
-        if (this.loading) {
-          app.innerHTML = `
-            <div class="min-h-screen flex items-center justify-center bg-slate-900">
-              <div class="text-center">
-                <div class="w-16 h-16 bg-gradient-to-br from-rose-500 to-orange-500 rounded-2xl flex items-center justify-center text-2xl font-bold text-white mx-auto mb-4">N1</div>
-                <p class="text-white animate-pulse">Loading...</p>
-              </div>
-            </div>
-          `;
-          return;
-        }
-        
-        // Show login screen if not authenticated
-        if (!this.user) {
-          app.innerHTML = this.renderLoginScreen();
-          return;
-        }
-        
-        // Show main app
         const filteredData = this.getFilteredData();
         const weeks = this.getWeeks();
         
@@ -367,7 +332,7 @@
                   </div>
                   <div>
                     <h1 class="text-lg font-bold">N1 語彙マスター</h1>
-                    <p class="text-xs text-slate-400">${this.data.length} words ${this.syncing ? '<span class="animate-pulse">⟳ Syncing...</span>' : '☁️ Synced'}</p>
+                    <p class="text-xs text-slate-400">${this.data.length} words ${this.syncing ? '<span class="animate-pulse">⟳ Syncing...</span>' : '☁️'}</p>
                   </div>
                 </div>
                 
@@ -376,43 +341,16 @@
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
                     <input type="file" accept=".csv" class="hidden" onchange="app.handleFileUpload(this.files[0])">
                   </label>
-                  
-                  <!-- Profile Button -->
-                  <div class="relative">
-                    <button onclick="app.showProfileMenu = !app.showProfileMenu; app.render();" class="flex items-center gap-2 p-1 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors">
-                      <img src="${this.user.user_metadata?.avatar_url || ''}" alt="" class="w-7 h-7 rounded-lg object-cover" onerror="this.style.display='none'">
-                      <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                    </button>
-                    
-                    ${this.showProfileMenu ? `
-                      <div class="absolute right-0 top-full mt-2 w-64 bg-white rounded-xl shadow-xl border border-slate-200 overflow-hidden z-50 animate-fadeIn">
-                        <div class="p-3 bg-slate-50 border-b border-slate-200">
-                          <div class="flex items-center gap-3">
-                            <img src="${this.user.user_metadata?.avatar_url || ''}" alt="" class="w-10 h-10 rounded-full object-cover" onerror="this.style.display='none'">
-                            <div class="flex-1 min-w-0">
-                              <p class="font-medium text-gray-900 truncate">${this.user.user_metadata?.full_name || 'User'}</p>
-                              <p class="text-xs text-gray-500 truncate">${this.user.email}</p>
-                            </div>
-                          </div>
-                        </div>
-                        <div class="p-2">
-                          <button onclick="app.syncFromCloud();" class="w-full px-3 py-2 text-left text-sm text-gray-700 hover:bg-slate-100 rounded-lg flex items-center gap-2">
-                            <span>🔄</span> Sync Now
-                          </button>
-                          <button onclick="app.signOut();" class="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50 rounded-lg flex items-center gap-2">
-                            <span>🚪</span> Sign Out
-                          </button>
-                        </div>
-                      </div>
-                    ` : ''}
-                  </div>
+                  <button onclick="app.showUserIdModal = true; app.render();" class="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors" title="Sync Settings">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                  </button>
                 </div>
               </div>
               
               <!-- Navigation -->
               <nav class="flex gap-1 overflow-x-auto hide-scrollbar pb-1 -mx-1 px-1">
                 ${['database', 'kanji-grid', 'hiragana-grid', 'study', 'flashcard'].map(v => `
-                  <button onclick="app.view = '${v}'; app.showProfileMenu = false; app.render();" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-sm whitespace-nowrap transition-colors ${this.view === v ? 'bg-white text-slate-900' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}">
+                  <button onclick="app.view = '${v}'; app.render();" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-sm whitespace-nowrap transition-colors ${this.view === v ? 'bg-white text-slate-900' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}">
                     ${v === 'database' ? '📖' : v === 'kanji-grid' ? '漢' : v === 'hiragana-grid' ? 'あ' : v === 'study' ? '📚' : '🔄'}
                     ${v === 'database' ? 'Database' : v === 'kanji-grid' ? 'Kanji' : v === 'hiragana-grid' ? 'Hiragana' : v === 'study' ? 'Study' : 'Flash'}
                   </button>
@@ -455,7 +393,7 @@
           </div>
           
           <!-- Main Content -->
-          <main class="max-w-7xl mx-auto px-3 py-4 pb-24" onclick="app.showProfileMenu = false;">
+          <main class="max-w-7xl mx-auto px-3 py-4 pb-24">
             ${this.renderView(filteredData)}
           </main>
           
@@ -463,7 +401,7 @@
           <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-2 z-30 md:hidden">
             <div class="flex justify-around text-xs">
               ${Object.entries(MARKING_CATEGORIES).slice(1).map(([k, v]) => `
-                <button onclick="event.stopPropagation(); app.filterMarking = app.filterMarking === ${k} ? null : ${k}; app.render();" class="flex flex-col items-center gap-0.5 p-1 rounded ${this.filterMarking === parseInt(k) ? 'bg-slate-200' : ''}">
+                <button onclick="app.filterMarking = app.filterMarking === ${k} ? null : ${k}; app.render();" class="flex flex-col items-center gap-0.5 p-1 rounded ${this.filterMarking === parseInt(k) ? 'bg-slate-200' : ''}">
                   <span class="text-lg">${v.icon}</span>
                   <span class="text-[10px] text-gray-500">${k}</span>
                 </button>
@@ -473,50 +411,9 @@
           
           <!-- Word Modal -->
           ${this.selectedWord ? this.renderWordModal() : ''}
-        `;
-      }
-      
-      renderLoginScreen() {
-        return `
-          <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
-            <div class="w-full max-w-sm">
-              <div class="text-center mb-8">
-                <div class="w-20 h-20 bg-gradient-to-br from-rose-500 to-orange-500 rounded-2xl flex items-center justify-center text-3xl font-bold text-white mx-auto mb-4 shadow-lg">
-                  N1
-                </div>
-                <h1 class="text-2xl font-bold text-white mb-2">N1 語彙マスター</h1>
-                <p class="text-slate-400">JLPT N1 Vocabulary Study App</p>
-              </div>
-              
-              <div class="bg-white rounded-2xl p-6 shadow-xl">
-                <h2 class="text-lg font-semibold text-gray-800 mb-4 text-center">Sign in to sync your progress</h2>
-                
-                <button onclick="app.signInWithGoogle();" class="w-full flex items-center justify-center gap-3 px-4 py-3 bg-white border-2 border-slate-200 rounded-xl hover:bg-slate-50 hover:border-slate-300 transition-all">
-                  <svg class="w-5 h-5" viewBox="0 0 24 24">
-                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
-                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
-                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
-                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
-                  </svg>
-                  <span class="font-medium text-gray-700">Continue with Google</span>
-                </button>
-                
-                <div class="mt-6 pt-6 border-t border-slate-200">
-                  <div class="flex items-start gap-3 text-sm text-slate-600">
-                    <span class="text-lg">☁️</span>
-                    <div>
-                      <p class="font-medium text-gray-800">Sync across devices</p>
-                      <p class="text-slate-500">Your markings sync automatically between phone, tablet, and computer.</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              
-              <p class="text-center text-slate-500 text-xs mt-6">
-                By signing in, you agree to save your study progress to the cloud.
-              </p>
-            </div>
-          </div>
+          
+          <!-- User ID Modal -->
+          ${this.showUserIdModal ? this.renderUserIdModal() : ''}
         `;
       }
       
@@ -756,6 +653,33 @@
                     `).join('')}
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      
+      renderUserIdModal() {
+        return `
+          <div class="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="app.showUserIdModal = false; app.render();">
+            <div class="bg-white rounded-2xl w-full max-w-md p-5 shadow-2xl animate-fadeIn" onclick="event.stopPropagation();">
+              <h2 class="text-xl font-bold mb-4">☁️ Cloud Sync Settings</h2>
+              
+              <div class="mb-4">
+                <label class="text-sm font-medium text-gray-600 block mb-1">Your Sync ID</label>
+                <input type="text" id="userIdInput" value="${this.userId}" class="w-full px-4 py-2 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-slate-400 font-mono text-sm">
+                <p class="text-xs text-gray-500 mt-1">Share this ID to sync across devices, or enter a friend's ID to use their progress.</p>
+              </div>
+              
+              <div class="flex gap-2">
+                <button onclick="app.showUserIdModal = false; app.render();" class="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-xl transition-colors">Cancel</button>
+                <button onclick="app.changeUserId(document.getElementById('userIdInput').value);" class="flex-1 px-4 py-2 bg-slate-800 text-white hover:bg-slate-700 rounded-xl transition-colors">Save & Sync</button>
+              </div>
+              
+              <div class="mt-4 pt-4 border-t border-gray-200">
+                <button onclick="navigator.clipboard.writeText('${this.userId}'); alert('Copied!');" class="w-full px-4 py-2 bg-emerald-100 text-emerald-700 hover:bg-emerald-200 rounded-xl transition-colors text-sm">
+                  📋 Copy Sync ID
+                </button>
               </div>
             </div>
           </div>
