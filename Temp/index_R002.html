@@ -50,6 +50,36 @@
     .animate-slideUp { animation: slideUp 0.3s ease-out; }
     .animate-pulse { animation: pulse 1.5s infinite; }
     input, select, button { font-size: 16px; }
+    
+    /* Print Styles */
+    @media print {
+      body { background: white !important; }
+      .no-print { display: none !important; }
+      .print-table { 
+        font-size: 11pt !important;
+        page-break-inside: auto;
+      }
+      .print-table tr { page-break-inside: avoid; }
+      .print-table th, .print-table td {
+        border: 1px solid #333 !important;
+        padding: 4px 8px !important;
+      }
+      .print-study-table td {
+        border: 1px solid #333 !important;
+        padding: 8px !important;
+      }
+      .print-study-table .kanji-cell {
+        font-size: 18pt !important;
+        font-weight: bold !important;
+      }
+      .print-study-table .context-cell {
+        font-size: 9pt !important;
+        color: #555 !important;
+      }
+      .print-study-table .meaning-cell {
+        font-size: 9pt !important;
+      }
+    }
   </style>
 </head>
 <body class="bg-slate-100 min-h-screen">
@@ -119,6 +149,7 @@
         
         const sentence = row['Sentence'] || '';
         const kanji = row['Kanji'] || '';
+        const hint = row['Hint'] || '';
         const kanjiClean = kanji.replace(/[＊\*\+\(\)（）①②③④⑤]/g, '');
         let word1 = '', word2 = '';
         if (sentence && kanjiClean) {
@@ -133,8 +164,8 @@
           srNo: row['Sr no'] || idx + 1,
           raw: row['Raw'] || '',
           kanji: row['Kanji'] || '',
-          hint: row['Hint'] || '',
-          sentence: row['Sentence'] || '',
+          hint: hint,
+          sentence: sentence,
           hiragana: row['Hiragana'] || '',
           meaning: row['Meaning'] || '',
           pageNo,
@@ -142,7 +173,7 @@
           day: weekDay.day,
           weekDayLabel: weekDay.label,
           supportWord1: word1,
-          supportWord2: word2 || row['Hint'] || '',
+          supportWord2: word2 || hint || '',
           marking: 0,
         };
       });
@@ -154,7 +185,7 @@
         this.user = null;
         this.data = [];
         this.markings = {};
-        this.view = 'database';
+        this.view = 'print-grid'; // Default to print grid view
         this.searchTerm = '';
         this.filterWeek = null;
         this.filterDay = null;
@@ -166,6 +197,7 @@
         this.syncing = false;
         this.loading = true;
         this.showProfileMenu = false;
+        this.printColumns = 4; // Number of columns for print grid
         
         this.init();
       }
@@ -173,13 +205,11 @@
       async init() {
         this.render();
         
-        // Check for existing session
         const { data: { session } } = await supabase.auth.getSession();
         if (session) {
           this.user = session.user;
         }
         
-        // Listen for auth changes
         supabase.auth.onAuthStateChange((event, session) => {
           this.user = session?.user || null;
           if (event === 'SIGNED_IN') {
@@ -329,11 +359,15 @@
         return Array.from(weeks).sort((a, b) => a - b);
       }
       
+      // ===== PRINT FUNCTION =====
+      printPage() {
+        window.print();
+      }
+      
       // ===== RENDER =====
       render() {
         const app = document.getElementById('app');
         
-        // Show loading screen
         if (this.loading) {
           app.innerHTML = `
             <div class="min-h-screen flex items-center justify-center bg-slate-900">
@@ -346,25 +380,21 @@
           return;
         }
         
-        // Show login screen if not authenticated
         if (!this.user) {
           app.innerHTML = this.renderLoginScreen();
           return;
         }
         
-        // Show main app
         const filteredData = this.getFilteredData();
         const weeks = this.getWeeks();
         
         app.innerHTML = `
           <!-- Header -->
-          <header class="bg-slate-900 text-white sticky top-0 z-40 shadow-xl">
+          <header class="bg-slate-900 text-white sticky top-0 z-40 shadow-xl no-print">
             <div class="max-w-7xl mx-auto px-3 py-3">
               <div class="flex items-center justify-between mb-3">
                 <div class="flex items-center gap-2">
-                  <div class="w-9 h-9 bg-gradient-to-br from-rose-500 to-orange-500 rounded-xl flex items-center justify-center text-lg font-bold">
-                    N1
-                  </div>
+                  <div class="w-9 h-9 bg-gradient-to-br from-rose-500 to-orange-500 rounded-xl flex items-center justify-center text-lg font-bold">N1</div>
                   <div>
                     <h1 class="text-lg font-bold">N1 語彙マスター</h1>
                     <p class="text-xs text-slate-400">${this.data.length} words ${this.syncing ? '<span class="animate-pulse">⟳ Syncing...</span>' : '☁️ Synced'}</p>
@@ -372,12 +402,16 @@
                 </div>
                 
                 <div class="flex items-center gap-2">
+                  <!-- Print Button -->
+                  <button onclick="app.printPage();" class="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors" title="Print">
+                    🖨️
+                  </button>
+                  
                   <label class="p-2 bg-slate-700 hover:bg-slate-600 rounded-lg cursor-pointer transition-colors">
                     <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
                     <input type="file" accept=".csv" class="hidden" onchange="app.handleFileUpload(this.files[0])">
                   </label>
                   
-                  <!-- Profile Button -->
                   <div class="relative">
                     <button onclick="app.showProfileMenu = !app.showProfileMenu; app.render();" class="flex items-center gap-2 p-1 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors">
                       <img src="${this.user.user_metadata?.avatar_url || ''}" alt="" class="w-7 h-7 rounded-lg object-cover" onerror="this.style.display='none'">
@@ -411,10 +445,14 @@
               
               <!-- Navigation -->
               <nav class="flex gap-1 overflow-x-auto hide-scrollbar pb-1 -mx-1 px-1">
-                ${['database', 'kanji-grid', 'hiragana-grid', 'study', 'flashcard'].map(v => `
-                  <button onclick="app.view = '${v}'; app.showProfileMenu = false; app.render();" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-sm whitespace-nowrap transition-colors ${this.view === v ? 'bg-white text-slate-900' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}">
-                    ${v === 'database' ? '📖' : v === 'kanji-grid' ? '漢' : v === 'hiragana-grid' ? 'あ' : v === 'study' ? '📚' : '🔄'}
-                    ${v === 'database' ? 'Database' : v === 'kanji-grid' ? 'Kanji' : v === 'hiragana-grid' ? 'Hiragana' : v === 'study' ? 'Study' : 'Flash'}
+                ${[
+                  { id: 'print-grid', icon: '📋', label: 'Print Grid' },
+                  { id: 'print-study', icon: '📝', label: 'Study Table' },
+                  { id: 'database', icon: '📖', label: 'Database' },
+                  { id: 'flashcard', icon: '🔄', label: 'Flashcard' },
+                ].map(v => `
+                  <button onclick="app.view = '${v.id}'; app.showProfileMenu = false; app.render();" class="px-3 py-1.5 rounded-lg flex items-center gap-1.5 text-sm whitespace-nowrap transition-colors ${this.view === v.id ? 'bg-white text-slate-900' : 'bg-slate-800 hover:bg-slate-700 text-slate-300'}">
+                    ${v.icon} ${v.label}
                   </button>
                 `).join('')}
               </nav>
@@ -422,7 +460,7 @@
           </header>
           
           <!-- Filters -->
-          <div class="bg-white border-b border-slate-200 sticky top-[104px] z-30 shadow-sm">
+          <div class="bg-white border-b border-slate-200 sticky top-[104px] z-30 shadow-sm no-print">
             <div class="max-w-7xl mx-auto px-3 py-2">
               <div class="flex flex-wrap items-center gap-2">
                 <div class="relative flex-1 min-w-[150px]">
@@ -446,10 +484,19 @@
                 </select>
                 
                 <button onclick="app.showMarkedOnly = !app.showMarkedOnly; app.render();" class="px-3 py-2 rounded-xl text-sm transition-colors ${this.showMarkedOnly ? 'bg-slate-800 text-white' : 'bg-slate-100 hover:bg-slate-200'}">
-                  ${this.showMarkedOnly ? '👁' : '👁‍🗨'} Marked
+                  ${this.showMarkedOnly ? '👁' : '👁‍🗨'} Marked Only
                 </button>
                 
-                <span class="text-xs text-gray-500">${filteredData.length}</span>
+                ${this.view === 'print-grid' ? `
+                  <select onchange="app.printColumns = parseInt(this.value); app.render();" class="px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white">
+                    <option value="3" ${this.printColumns === 3 ? 'selected' : ''}>3 Columns</option>
+                    <option value="4" ${this.printColumns === 4 ? 'selected' : ''}>4 Columns</option>
+                    <option value="5" ${this.printColumns === 5 ? 'selected' : ''}>5 Columns</option>
+                    <option value="6" ${this.printColumns === 6 ? 'selected' : ''}>6 Columns</option>
+                  </select>
+                ` : ''}
+                
+                <span class="text-xs text-gray-500">${filteredData.length} words</span>
               </div>
             </div>
           </div>
@@ -460,7 +507,7 @@
           </main>
           
           <!-- Marking Legend (Mobile Bottom) -->
-          <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-2 z-30 md:hidden">
+          <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 p-2 z-30 md:hidden no-print">
             <div class="flex justify-around text-xs">
               ${Object.entries(MARKING_CATEGORIES).slice(1).map(([k, v]) => `
                 <button onclick="event.stopPropagation(); app.filterMarking = app.filterMarking === ${k} ? null : ${k}; app.render();" class="flex flex-col items-center gap-0.5 p-1 rounded ${this.filterMarking === parseInt(k) ? 'bg-slate-200' : ''}">
@@ -481,9 +528,7 @@
           <div class="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 p-4">
             <div class="w-full max-w-sm">
               <div class="text-center mb-8">
-                <div class="w-20 h-20 bg-gradient-to-br from-rose-500 to-orange-500 rounded-2xl flex items-center justify-center text-3xl font-bold text-white mx-auto mb-4 shadow-lg">
-                  N1
-                </div>
+                <div class="w-20 h-20 bg-gradient-to-br from-rose-500 to-orange-500 rounded-2xl flex items-center justify-center text-3xl font-bold text-white mx-auto mb-4 shadow-lg">N1</div>
                 <h1 class="text-2xl font-bold text-white mb-2">N1 語彙マスター</h1>
                 <p class="text-slate-400">JLPT N1 Vocabulary Study App</p>
               </div>
@@ -500,21 +545,7 @@
                   </svg>
                   <span class="font-medium text-gray-700">Continue with Google</span>
                 </button>
-                
-                <div class="mt-6 pt-6 border-t border-slate-200">
-                  <div class="flex items-start gap-3 text-sm text-slate-600">
-                    <span class="text-lg">☁️</span>
-                    <div>
-                      <p class="font-medium text-gray-800">Sync across devices</p>
-                      <p class="text-slate-500">Your markings sync automatically between phone, tablet, and computer.</p>
-                    </div>
-                  </div>
-                </div>
               </div>
-              
-              <p class="text-center text-slate-500 text-xs mt-6">
-                By signing in, you agree to save your study progress to the cloud.
-              </p>
             </div>
           </div>
         `;
@@ -522,13 +553,131 @@
       
       renderView(filteredData) {
         switch (this.view) {
+          case 'print-grid': return this.renderPrintGridView(filteredData);
+          case 'print-study': return this.renderPrintStudyView(filteredData);
           case 'database': return this.renderDatabaseView(filteredData);
-          case 'kanji-grid': return this.renderGridView(filteredData, true);
-          case 'hiragana-grid': return this.renderGridView(filteredData, false);
-          case 'study': return this.renderStudyView(filteredData);
           case 'flashcard': return this.renderFlashcardView(filteredData);
           default: return '';
         }
+      }
+      
+      // ===== NEW: PRINT GRID VIEW (4 columns with week/day) =====
+      renderPrintGridView(data) {
+        if (data.length === 0) {
+          return `<div class="text-center py-20 text-gray-500"><p>No words found. Import your CSV file!</p></div>`;
+        }
+        
+        // Group by weekDayLabel
+        const grouped = {};
+        data.forEach(w => {
+          if (!grouped[w.weekDayLabel]) grouped[w.weekDayLabel] = [];
+          grouped[w.weekDayLabel].push(w);
+        });
+        
+        // Sort week/day labels
+        const sortedLabels = Object.keys(grouped).sort((a, b) => {
+          const [aWeek, aDay] = a.match(/(\d+)週(\d+)日/).slice(1).map(Number);
+          const [bWeek, bDay] = b.match(/(\d+)週(\d+)日/).slice(1).map(Number);
+          return aWeek - bWeek || aDay - bDay;
+        });
+        
+        const cols = this.printColumns;
+        
+        return `
+          <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+            <div class="p-4 bg-slate-50 border-b flex justify-between items-center no-print">
+              <h2 class="font-bold text-lg">📋 Print Grid View</h2>
+              <button onclick="app.printPage();" class="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                🖨️ Print
+              </button>
+            </div>
+            
+            <div class="overflow-x-auto">
+              <table class="w-full print-table border-collapse">
+                <thead>
+                  <tr class="bg-slate-100">
+                    <th class="border border-slate-300 p-2 text-center font-bold w-20">週日</th>
+                    ${Array.from({ length: cols }).map((_, i) => `
+                      <th class="border border-slate-300 p-2 text-center font-bold">${i + 1}</th>
+                    `).join('')}
+                  </tr>
+                </thead>
+                <tbody>
+                  ${sortedLabels.map(label => {
+                    const words = grouped[label];
+                    const rows = Math.ceil(words.length / cols);
+                    
+                    return Array.from({ length: rows }).map((_, rowIdx) => `
+                      <tr class="${rowIdx % 2 === 0 ? 'bg-white' : 'bg-slate-50'}">
+                        ${rowIdx === 0 ? `
+                          <td class="border border-slate-300 p-2 text-center font-medium bg-blue-50" rowspan="${rows}">${label}</td>
+                        ` : ''}
+                        ${Array.from({ length: cols }).map((_, colIdx) => {
+                          const word = words[rowIdx * cols + colIdx];
+                          if (!word) return `<td class="border border-slate-300 p-2"></td>`;
+                          const marking = this.markings[word.id] || 0;
+                          const m = MARKING_CATEGORIES[marking];
+                          return `
+                            <td class="border border-slate-300 p-2 cursor-pointer hover:bg-slate-100 ${marking > 0 ? m.color : ''}" onclick="app.selectedWord = app.data.find(w => w.id === ${word.id}); app.render();">
+                              ${word.kanji}
+                            </td>
+                          `;
+                        }).join('')}
+                      </tr>
+                    `).join('');
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
+      }
+      
+      // ===== NEW: PRINT STUDY VIEW (Supporting word 1 | Kanji | Supporting word 2 | Meaning) =====
+      renderPrintStudyView(data) {
+        if (data.length === 0) {
+          return `<div class="text-center py-20 text-gray-500"><p>No words found. Try adjusting filters or import CSV.</p></div>`;
+        }
+        
+        return `
+          <div class="bg-white rounded-xl shadow-lg overflow-hidden">
+            <div class="p-4 bg-slate-50 border-b flex justify-between items-center no-print">
+              <h2 class="font-bold text-lg">📝 Study Table (${data.length} words)</h2>
+              <button onclick="app.printPage();" class="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-700 transition-colors">
+                🖨️ Print
+              </button>
+            </div>
+            
+            <div class="overflow-x-auto">
+              <table class="w-full print-study-table border-collapse">
+                <thead>
+                  <tr class="bg-slate-800 text-white">
+                    <th class="border border-slate-600 p-3 text-center w-12">週日</th>
+                    <th class="border border-slate-600 p-3 text-left">Supporting 1</th>
+                    <th class="border border-slate-600 p-3 text-center text-xl">Kanji</th>
+                    <th class="border border-slate-600 p-3 text-left">Supporting 2</th>
+                    <th class="border border-slate-600 p-3 text-left">Meaning</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${data.map((word, idx) => {
+                    const marking = this.markings[word.id] || 0;
+                    const m = MARKING_CATEGORIES[marking];
+                    return `
+                      <tr class="${idx % 2 === 0 ? 'bg-white' : 'bg-slate-50'} ${marking > 0 ? m.color : ''} cursor-pointer hover:bg-slate-100" onclick="app.selectedWord = app.data.find(w => w.id === ${word.id}); app.render();">
+                        <td class="border border-slate-200 p-2 text-center text-xs text-gray-500">${word.weekDayLabel}</td>
+                        <td class="border border-slate-200 p-2 context-cell text-gray-600 text-sm max-w-[150px]">${word.supportWord1 || ''}</td>
+                        <td class="border border-slate-200 p-3 kanji-cell text-center text-2xl font-bold">${word.kanji}</td>
+                        <td class="border border-slate-200 p-2 context-cell text-gray-600 text-sm max-w-[200px]">${word.supportWord2 || ''}</td>
+                        <td class="border border-slate-200 p-2 meaning-cell text-gray-700 text-sm">${word.meaning}</td>
+                      </tr>
+                    `;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        `;
       }
       
       renderDatabaseView(data) {
@@ -565,83 +714,7 @@
               </div>
             `;
           }).join('')}
-          ${data.length > 100 ? `<p class="text-center text-gray-500 py-4">Showing first 100 of ${data.length} results. Use filters to narrow down.</p>` : ''}
-        </div>`;
-      }
-      
-      renderGridView(data, showKanji) {
-        const grouped = {};
-        data.forEach(w => {
-          if (!grouped[w.weekDayLabel]) grouped[w.weekDayLabel] = [];
-          grouped[w.weekDayLabel].push(w);
-        });
-        
-        const weeks = this.getWeeks();
-        const weekDays = [];
-        weeks.forEach(w => {
-          for (let d = 1; d <= 7; d++) weekDays.push(`${w}週${d}日`);
-        });
-        
-        const maxRows = Math.max(...Object.values(grouped).map(arr => arr.length), 1);
-        
-        return `<div class="overflow-x-auto -mx-3 px-3">
-          <table class="min-w-full border-collapse text-sm">
-            <thead>
-              <tr>
-                <th class="sticky left-0 bg-slate-800 text-white p-2 text-xs font-medium border border-slate-600 z-10">#</th>
-                ${weekDays.slice(0, 21).map(wd => `
-                  <th class="bg-slate-800 text-white p-2 text-xs font-medium border border-slate-600 min-w-[80px]">${wd}</th>
-                `).join('')}
-              </tr>
-            </thead>
-            <tbody>
-              ${Array.from({ length: Math.min(maxRows, 25) }).map((_, rowIdx) => `
-                <tr>
-                  <td class="sticky left-0 bg-slate-100 p-1.5 text-center text-xs font-medium border border-slate-300 z-10">${rowIdx + 1}</td>
-                  ${weekDays.slice(0, 21).map(wd => {
-                    const words = grouped[wd] || [];
-                    const word = words[rowIdx];
-                    if (!word) return `<td class="p-1.5 border border-slate-200 bg-white"></td>`;
-                    const marking = this.markings[word.id] || 0;
-                    const m = MARKING_CATEGORIES[marking];
-                    return `
-                      <td class="p-1.5 border border-slate-200 cursor-pointer hover:bg-slate-50 transition-colors ${marking > 0 ? m.color : 'bg-white'}" onclick="app.selectedWord = app.data.find(w => w.id === ${word.id}); app.render();">
-                        <span class="text-xs font-medium">${showKanji ? word.kanji : word.hiragana}</span>
-                      </td>
-                    `;
-                  }).join('')}
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
-        </div>`;
-      }
-      
-      renderStudyView(data) {
-        if (data.length === 0) {
-          return `<div class="text-center py-20 text-gray-500"><p>No words match your filters.</p></div>`;
-        }
-        
-        return `<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-          ${data.slice(0, 50).map(word => {
-            const marking = this.markings[word.id] || 0;
-            const m = MARKING_CATEGORIES[marking];
-            return `
-              <div class="p-4 rounded-2xl border-2 ${m.border} bg-white shadow-sm hover:shadow-md transition-all cursor-pointer" onclick="app.selectedWord = app.data.find(w => w.id === ${word.id}); app.render();">
-                <div class="flex items-center gap-2 mb-2 text-xs text-gray-500">
-                  <span class="px-2 py-0.5 rounded ${m.color}">${word.weekDayLabel}</span>
-                  ${marking > 0 ? `<span>${m.icon}</span>` : ''}
-                </div>
-                <div class="flex items-center gap-2 mb-3 flex-wrap">
-                  ${word.supportWord1 ? `<span class="text-gray-400 text-sm">${word.supportWord1}</span>` : ''}
-                  <span class="text-2xl font-bold text-gray-900">${word.kanji}</span>
-                  ${word.supportWord2 ? `<span class="text-gray-400 text-sm">${word.supportWord2}</span>` : ''}
-                </div>
-                <div class="text-sm text-gray-600 mb-1">${word.hiragana}</div>
-                <div class="text-gray-700 text-sm">${word.meaning}</div>
-              </div>
-            `;
-          }).join('')}
+          ${data.length > 100 ? `<p class="text-center text-gray-500 py-4">Showing first 100 of ${data.length} results.</p>` : ''}
         </div>`;
       }
       
@@ -693,15 +766,9 @@
             </div>
             
             <div class="flex items-center justify-center gap-3 mt-6">
-              <button onclick="app.flashcardIndex = Math.max(0, app.flashcardIndex - 1); app.flashcardRevealed = false; app.render();" ${this.flashcardIndex === 0 ? 'disabled' : ''} class="p-3 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 transition-colors">
-                ◀
-              </button>
-              <button onclick="app.flashcardIndex = Math.floor(Math.random() * ${data.length}); app.flashcardRevealed = false; app.render();" class="px-5 py-3 rounded-xl bg-slate-800 text-white hover:bg-slate-700 transition-colors">
-                Random
-              </button>
-              <button onclick="app.flashcardIndex = Math.min(${data.length - 1}, app.flashcardIndex + 1); app.flashcardRevealed = false; app.render();" ${this.flashcardIndex === data.length - 1 ? 'disabled' : ''} class="p-3 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 transition-colors">
-                ▶
-              </button>
+              <button onclick="app.flashcardIndex = Math.max(0, app.flashcardIndex - 1); app.flashcardRevealed = false; app.render();" ${this.flashcardIndex === 0 ? 'disabled' : ''} class="p-3 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 transition-colors">◀</button>
+              <button onclick="app.flashcardIndex = Math.floor(Math.random() * ${data.length}); app.flashcardRevealed = false; app.render();" class="px-5 py-3 rounded-xl bg-slate-800 text-white hover:bg-slate-700 transition-colors">Random</button>
+              <button onclick="app.flashcardIndex = Math.min(${data.length - 1}, app.flashcardIndex + 1); app.flashcardRevealed = false; app.render();" ${this.flashcardIndex === data.length - 1 ? 'disabled' : ''} class="p-3 rounded-xl bg-slate-100 hover:bg-slate-200 disabled:opacity-50 transition-colors">▶</button>
             </div>
           </div>
         `;
@@ -713,7 +780,7 @@
         const m = MARKING_CATEGORIES[marking];
         
         return `
-          <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-50 p-0 md:p-4" onclick="app.selectedWord = null; app.render();">
+          <div class="fixed inset-0 bg-black/50 flex items-end md:items-center justify-center z-50 p-0 md:p-4 no-print" onclick="app.selectedWord = null; app.render();">
             <div class="bg-white rounded-t-3xl md:rounded-3xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-2xl animate-slideUp" onclick="event.stopPropagation();">
               <div class="p-5 ${m.color} rounded-t-3xl md:rounded-t-3xl sticky top-0">
                 <div class="flex items-start justify-between">
@@ -763,7 +830,6 @@
       }
     }
     
-    // Initialize app
     window.app = new N1VocabApp();
   </script>
 </body>
